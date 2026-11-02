@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>QuantaScan: simulated battery pack inspection</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap">
+<style>
+:root{--bg:#EEF1F5;--panel:#fff;--ink:#14213D;--mute:#5B6678;--line:#D5DBE5;--ok:#0E7C6B;--bad:#C8102E;--acc:#2B5FB0;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0F1623;--panel:#18212F;--ink:#E8EDF5;--mute:#9AA6B8;--line:#2B374A;--ok:#3CC9AE;--bad:#FF5A6E;--acc:#7FA8F0;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0F1623;--panel:#18212F;--ink:#E8EDF5;--mute:#9AA6B8;--line:#2B374A;--ok:#3CC9AE;--bad:#FF5A6E;--acc:#7FA8F0;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.5 Manrope,system-ui,sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:clamp(32px,6vw,52px);font-weight:800;letter-spacing:-.03em;line-height:1.05;margin:0 0 8px}
+h2{font-size:17px;font-weight:600;margin:0 0 4px}
+.lead{font-size:19px;max-width:60ch;margin:0 0 14px}
+.note{border-left:4px solid var(--bad);background:var(--panel);padding:10px 14px;margin:0 0 20px;font-size:14px;max-width:80ch}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px;min-width:0}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px}
+.ctl{display:flex;flex-wrap:wrap;gap:16px 24px;align-items:end}
+label{display:flex;flex-direction:column;font-size:14px;color:var(--mute);gap:4px}
+select,input[type=range]{font:inherit;color:var(--ink)}
+select{padding:8px;background:var(--bg);border:1px solid var(--line);border-radius:4px;min-width:200px}
+input[type=range]{width:240px;max-width:100%}
+button{font:600 15px Manrope,system-ui,sans-serif;background:var(--acc);color:#fff;border:0;border-radius:4px;padding:10px 18px;cursor:pointer}
+:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+canvas{width:100%;height:auto;display:block;border-radius:4px}
+.cap{font-size:14px;color:var(--mute);margin:8px 0 0}
+#verdict{font-size:clamp(22px,4vw,32px);font-weight:800;margin:4px 0 8px}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+#detail p{margin:6px 0}
+footer{font-size:13px;color:var(--mute);max-width:90ch;margin-top:8px}
+</style></head><body><div class="wrap">
+<h1>QuantaScan</h1>
+<p class="lead">A magnetic X-ray for EV battery packs. Find a bad weld or a shorted cell before the pack leaves the line.</p>
+<p class="note"><b>Simulated data.</b> This MVP is a physics-based software model of NV-diamond magnetic imaging. The quantum sensor hardware is not built yet (concept stage, TRL 2).</p>
+
+<section class="panel" style="margin-bottom:16px">
+<h2>Set up a scan</h2>
+<p class="cap" style="margin:0 0 12px">Pick a fault, place it on the pack, then see whether the sensor can catch it.</p>
+<div class="ctl">
+<label>Fault<select id="type"><option value="weak" selected>Weak weld (20% less current)</option><option value="open">Open weld (no current)</option><option value="short">Cell short (60% extra current)</option><option value="none">Healthy pack (no fault)</option></select></label>
+<label>Cell<select id="cell"></select></label>
+<label>Sensor noise: <output id="nv"></output><input id="noise" type="range" min="0" max="100" value="43"></label>
+<button id="again">Scan again</button>
+</div></section>
+
+<div class="row">
+<section class="panel"><h2>Battery module</h2><canvas id="pack" width="420" height="292"></canvas><p class="cap">24 cells, 4 rows by 6. Click a cell to place the fault. Red cells are flagged by the scan.</p></section>
+<section class="panel"><h2>Magnetic image</h2><canvas id="map" width="450" height="324"></canvas><p class="cap">Change from a healthy pack. Blue means less field, orange means more. Faint colour means the fault is hidden in sensor noise.</p></section>
+</div>
+
+<div class="row">
+<section class="panel" aria-live="polite"><h2>Result</h2><div id="verdict"></div><div id="detail"></div></section>
+<section class="panel"><h2>How good must the sensor be?</h2><canvas id="chart" width="640" height="240"></canvas><p class="cap" id="lim"></p></section>
+</div>
+<footer>How the model works: each cell’s connection strip is a straight wire carrying the test current. The field above the pack is computed with the Biot–Savart law at 3 mm standoff, with 1.5% natural cell-to-cell variation. The scan fits one current value per cell to the measured image and flags any cell that deviates by more than the larger of 8% or four times its noise-limited uncertainty. This is a simplified model for a concept-stage demo, not a validated pack simulation.</footer>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const cv=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const g=()=>Math.sqrt(-2*Math.log(1-Math.random()))*Math.cos(6.28318*Math.random());
+const R=4,C=6,N=R*C,P=21,MG=12,PX=2,H=3,L=10.5,SC=6;
+const W=Math.round((C*P+2*MG)/PX),HH=Math.round((R*P+2*MG)/PX);
+const cells=[];for(let r=0;r<R;r++)for(let c=0;c<C;c++)cells.push({r,c,x:MG+P*(c+.5),y:MG+P*(r+.5)});
+const names={weak:'Weak weld',open:'Open weld',short:'Cell short'};
+const lb=i=>`row ${cells[i].r+1}, cell ${cells[i].c+1}`;
+cells.forEach((_,i)=>$('cell').add(new Option(lb(i),i)));$('cell').value=9;
+const T=cells.map(({x:cx,y:cy})=>{const t=new Float32Array(W*HH);for(let j=0;j<HH;j++)for(let i=0;i<W;i++){const x=(i+.5)*PX,y=(j+.5)*PX,dx=x-cx,a2=dx*dx+H*H,s1=cy+L-y,s0=cy-L-y;t[j*W+i]=-1e5*dx*(s1/Math.sqrt(a2+s1*s1)-s0/Math.sqrt(a2+s0*s0))/a2}return t});
+const dot=(a,b)=>{let s=0;for(let i=0;i<a.length;i++)s+=a[i]*b[i];return s};
+function inv(A){const n=A.length,m=A.map((r,i)=>[...r,...Array.from({length:n},(_,j)=>+(i==j))]);for(let i=0;i<n;i++){let p=i;for(let r=i+1;r<n;r++)if(Math.abs(m[r][i])>Math.abs(m[p][i]))p=r;[m[i],m[p]]=[m[p],m[i]];const d=m[i][i];for(let j=0;j<2*n;j++)m[i][j]/=d;for(let r=0;r<n;r++)if(r!=i){const f=m[r][i];if(f)for(let j=0;j<2*n;j++)m[r][j]-=f*m[i][j]}}return m.map(r=>r.slice(n))}
+const Ai=inv(T.map(a=>T.map(b=>dot(a,b))));const sd=Ai.map((r,i)=>Math.sqrt(r[i]));
+const coeffs=(type,k)=>cells.map((_,i)=>i==k&&type!='none'?{weak:.8,open:0,short:1.6}[type]:1+.015*g());
+function sim(co,sig){const D=new Float32Array(W*HH);for(let j=0;j<N;j++){const d=co[j]-1,t=T[j];for(let i=0;i<D.length;i++)D[i]+=d*t[i]}for(let i=0;i<D.length;i++)D[i]+=sig*g();const b=T.map(t=>dot(t,D));return{D,e:Ai.map(r=>r.reduce((s,a,k)=>s+a*b[k],0))}}
+const thr=(i,sig)=>Math.max(.08,4*sig*sd[i]);
+const flags=(e,sig)=>e.map((v,i)=>Math.abs(v)>thr(i,sig)?i:-1).filter(i=>i>=0);
+const right=(fl,type,k)=>type=='none'?!fl.length:(fl.length==1&&fl[0]==k);
+const noise=()=>Math.pow(10,1+3.477*$('noise').value/100);
+const NZ=Array.from({length:13},(_,i)=>Math.pow(10,1+3.5*i/12));let curve=[];
+function mc(){const type=$('type').value,k=+$('cell').value;curve=NZ.map(n=>{let ok=0;for(let t=0;t<25;t++){const {e}=sim(coeffs(type,k),n);ok+=right(flags(e,n),type,k)}return ok/25})}
+let last=null;
+function scan(){const type=$('type').value,k=+$('cell').value,sig=noise();$('nv').textContent=Math.round(sig)+' nT per pixel';last={type,k,sig,...sim(coeffs(type,k),sig)};last.fl=flags(last.e,sig);draw()}
+function draw(){if(!last)return;const{type,k,sig,D,e,fl}=last;
+const mc2=$('map'),x=mc2.getContext('2d'),off=document.createElement('canvas');off.width=W;off.height=HH;const ox=off.getContext('2d'),im=ox.createImageData(W,HH);
+for(let i=0;i<D.length;i++){const t=Math.max(-1,Math.min(1,D[i]/6000)),a=Math.abs(t),c=t<0?[43,95,176]:[217,84,30];for(let q=0;q<3;q++)im.data[i*4+q]=245+(c[q]-245)*a;im.data[i*4+3]=255}
+ox.putImageData(im,0,0);x.imageSmoothingEnabled=true;x.drawImage(off,0,0,W*SC,HH*SC);
+x.strokeStyle='rgba(20,33,61,.35)';x.lineWidth=1;cells.forEach(c=>{x.beginPath();x.arc(c.x/PX*SC,c.y/PX*SC,9.5/PX*SC,0,6.283);x.stroke()});
+const pk=$('pack'),p=pk.getContext('2d');p.clearRect(0,0,420,292);
+cells.forEach((c,i)=>{const cx=18+64*c.c+32,cy=18+64*c.r+32,bad=fl.includes(i);p.beginPath();p.arc(cx,cy,26,0,6.283);p.fillStyle=bad?cv('--bad'):cv('--bg');p.fill();p.lineWidth=bad?3:1.5;p.strokeStyle=bad?cv('--bad'):cv('--line');p.stroke();
+if(i==k&&type!='none'){p.setLineDash([4,4]);p.strokeStyle=cv('--ink');p.lineWidth=2;p.beginPath();p.arc(cx,cy,31,0,6.283);p.stroke();p.setLineDash([])}
+p.fillStyle=bad?'#fff':cv('--mute');p.font='600 12px Manrope,system-ui,sans-serif';p.textAlign='center';p.fillText(`${c.r+1}.${c.c+1}`,cx,cy+4)});
+const v=$('verdict'),pc=u=>(u>0?'+':'')+Math.round(u*100)+'%';
+if(fl.length){v.textContent='FAIL: '+fl.map(lb).join('; ');v.className='bad'}else{v.textContent='PASS: no fault found';v.className='ok'}
+const ok=right(fl,type,k),m=Math.max(...sd.map((s,i)=>thr(i,sig)));
+$('detail').innerHTML=(fl.length?fl.map(i=>`<p>${lb(i)} carries ${pc(e[i])} current compared with a healthy pack.</p>`).join(''):'')+
+`<p>Simulated truth: ${type=='none'?'healthy pack':names[type]+' at '+lb(k)}. ${ok?'Correct call.':'<b>Wrong or missed call at this noise level.</b>'}</p><p>Smallest current change visible at this noise: ${m>=1?'more than 100%':Math.round(m*100)+'%'}.</p>`;
+chart()}
+function chart(){const c=$('chart'),x=c.getContext('2d'),w=c.width,h=c.height,pl=46,pb=34,pt=10,pr=12;x.clearRect(0,0,w,h);
+const X=n=>pl+(Math.log10(n)-1)/3.5*(w-pl-pr),Y=q=>pt+(1-q)*(h-pt-pb);
+x.font='12px Manrope,system-ui,sans-serif';x.strokeStyle=cv('--line');x.fillStyle=cv('--mute');x.lineWidth=1;x.textAlign='left';
+[0,.5,1].forEach(q=>{x.beginPath();x.moveTo(pl,Y(q));x.lineTo(w-pr,Y(q));x.stroke();x.fillText(q*100+'%',8,Y(q)+4)});
+[10,100,1000,10000].forEach(n=>x.fillText(n>=1000?n/1000+'k':n,X(n)-8,h-18));
+x.fillText('sensor noise (nT per pixel), correct calls out of 25 runs',pl,h-3);
+x.strokeStyle=cv('--acc');x.lineWidth=2.5;x.beginPath();NZ.forEach((n,i)=>{i?x.lineTo(X(n),Y(curve[i])):x.moveTo(X(n),Y(curve[i]))});x.stroke();
+x.strokeStyle=cv('--bad');x.lineWidth=1.5;x.setLineDash([5,4]);x.beginPath();x.moveTo(X(last.sig),pt);x.lineTo(X(last.sig),h-pb);x.stroke();x.setLineDash([]);
+let lim=-1;for(let i=0;i<NZ.length&&curve[i]>=.9;i++)lim=NZ[i];
+$('lim').textContent=lim<0?'This fault is not reliably detectable at any tested noise level.':`Calls stay at least 90% correct up to about ${Math.round(lim)} nT of sensor noise. The red line marks your current setting.`}
+$('type').onchange=$('cell').onchange=()=>{mc();scan()};
+$('noise').oninput=scan;$('again').onclick=scan;
+$('pack').onclick=e=>{const r=e.target.getBoundingClientRect(),px=(e.clientX-r.left)*420/r.width,py=(e.clientY-r.top)*292/r.height,c=Math.floor((px-18)/64),q=Math.floor((py-18)/64);if(c>=0&&c<C&&q>=0&&q<R){$('cell').value=q*C+c;mc();scan()}};
+matchMedia('(prefers-color-scheme:dark)').addEventListener('change',draw);
+mc();scan();
+</script></body></html>
